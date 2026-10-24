@@ -237,7 +237,7 @@ def register_agent_hooks(cap_module, outbound_module) -> None:
         text = _REPEAT_RUN.sub(r"\1\1\1", text.strip())
         if not text:
             return "（没给要念的文字）"
-        ref = voice.pick_ref(cfg)
+        ref = voice.pick_ref(cfg, text)
         if ref is None:
             return "（语音服务没配好，先不念了）"
         wav = await tts_client.synthesize(cfg, text[:120], *ref)

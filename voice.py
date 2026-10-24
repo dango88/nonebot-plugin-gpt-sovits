@@ -25,6 +25,24 @@ _SKIP_PATTERNS = re.compile(
 # 念之前清掉：残留 markdown 强调/井号头/多余空白
 _CLEAN_PATTERNS = re.compile(r"[*#`~]{1,3}|^\s*[>》]\s*")
 
+# 情绪识别：关键词命中计分，委屈 > 着急 > 开心 优先（低落线索的韵律特征最强，
+# 误判代价也最大）。都不中 → 0 号「日常」。规则与挑参考音频时的分组词表同源。
+_EMO_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("委屈", re.compile(r"对不起|抱歉|呜|难过|伤心|眼泪|哭|别丢下|委屈|失望|害怕|不安|没用|做不到|不想|孤独|寂寞|自责|抱歉|丢下我|为什么.{0,6}不")),
+    ("着急", re.compile(r"糟糕|糟了|坏了|怎么办|危险|小心|快一点|快点|来不及|等等我|住手|不好了|出事了|快逃|警报|赶紧|急死")),
+    ("开心", re.compile(r"哈哈|嘿嘿|太好了|好耶|好开心|万岁|太棒|真棒|好厉害|厉害|终于|好期待|好喜欢|真好玩|好有趣|太有意思|好可爱|回来了|太好了")),
+)
+
+
+def detect_emotion(text: str) -> str:
+    """按关键词命中数给回复定情绪名；全零 → 空串（调用方回落 0 号组）。"""
+    best, best_hits = "", 0
+    for name, pat in _EMO_RULES:
+        hits = len(pat.findall(text))
+        if hits > best_hits:
+            best, best_hits = name, hits
+    return best
+
 _last_voice_at: dict[str, float] = {}
 
 
@@ -33,11 +51,17 @@ def _session_key(event: MessageEvent) -> str:
     return f"group_{gid}" if gid else f"private_{event.user_id}"
 
 
-def pick_ref(cfg: Config) -> tuple[str, str, str] | None:
-    """从情绪表随机挑一条参考（语音用 0 号「日常」最稳，短句优先）。"""
+def pick_ref(cfg: Config, text: str = "") -> tuple[str, str, str] | None:
+    """按回复情绪挑参考组：detect 命中的组名在情绪表里找，找不到回落 0 号。"""
     if not cfg.emotions:
         return None
     emotion = cfg.emotions[0]
+    want = detect_emotion(text)
+    if want:
+        for e in cfg.emotions:
+            if e.name == want:
+                emotion = e
+                break
     sentence = random.choice(emotion.sentences)
     return sentence.path, sentence.text, sentence.language
 
@@ -73,5 +97,5 @@ async def maybe_voice(event: MessageEvent, text: str) -> MessageSegment | None:
     if wav is None:
         return None
     _last_voice_at[_session_key(event)] = time.monotonic()
-    logger.info(f"[gpt_sovits] 概率语音命中（{_session_key(event)}，{len(spoken)}字）")
+    logger.info(f"[gpt_sovits] 概率语音命中（{_session_key(event)}，{len(spoken)}字，情绪 {detect_emotion(spoken) or '日常'}）")
     return MessageSegment.record(wav)
