@@ -10,8 +10,9 @@ from nonebot import logger
 
 from .config import Config
 
-_HEALTH_TTL = 300.0        # 健康结论缓存 5 分钟：离线时别每条回复都去撞
-_HEALTH_TIMEOUT = 3.0      # 探活超时：再长就抢了回复节奏
+_HEALTH_TTL_OK = 300.0      # 在线结论缓存 5 分钟：活着就别反复探
+_HEALTH_TTL_DOWN = 60.0     # 离线结论只缓存 1 分钟：api 一恢复（开机自启/重启）尽快转回语音
+_HEALTH_TIMEOUT = 3.0       # 探活超时：再长就抢了回复节奏
 _TTS_TIMEOUT = 45.0        # 合成超时：长句 cut5 切分后 45s 足够，超了发文字
 
 _last_check: dict[str, float] = {}
@@ -26,7 +27,8 @@ def _note_health(base_url: str, ok: bool) -> None:
 async def is_online(cfg: Config, *, force: bool = False) -> bool:
     """api_v2 是否在线。GET / 收到任何 HTTP 响应（含 404）即算活着。"""
     now = time.monotonic()
-    if not force and now - _last_check.get(cfg.base_url, -1e9) < _HEALTH_TTL:
+    ttl = _HEALTH_TTL_OK if _last_ok.get(cfg.base_url) else _HEALTH_TTL_DOWN
+    if not force and now - _last_check.get(cfg.base_url, -1e9) < ttl:
         return _last_ok[cfg.base_url]
     try:
         async with aiohttp.ClientSession() as session, session.get(
