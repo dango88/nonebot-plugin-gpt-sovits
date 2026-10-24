@@ -89,8 +89,11 @@ help_matcher = on_command(
 @tts.handle()
 async def handle_tts(arp: Arparma):
     text: str = arp.main_args["text"]
-    emotion_index: str = arp.options["e"].args["emotion"] or arp.other_args["emotion"]
-    text_language: str = arp.options["l"].args["language"] or arp.other_args["language"]
+    # 新版 alconna 的 Option default 不落进 Arparma（缺省时 args 为空表），显式判空取默认
+    e_args: dict = arp.options["e"].args if "e" in arp.options else {}
+    emotion_index: str = str(e_args["emotion"]) if "emotion" in e_args else "0"
+    l_args: dict = arp.options["l"].args if "l" in arp.options else {}
+    text_language: str = str(l_args["language"]) if "language" in l_args else "auto"
 
     cfg = load_config()
     if not cfg.emotions:
