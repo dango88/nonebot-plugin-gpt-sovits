@@ -2,6 +2,7 @@ import random
 import re
 
 import nonebot
+from nonebot import get_driver
 from nonebot.log import logger
 from nonebot import require, on_command
 from nonebot.plugin import PluginMetadata, inherit_supported_adapters
@@ -19,6 +20,8 @@ from nonebot_plugin_alconna import (
 )
 
 from .config import Config, load_config
+from . import voice
+from . import tts_client
 from .utils import generate, generate_v2, get_wav_duration, encode_to_silk
 
 
@@ -194,3 +197,69 @@ async def handle_help():
         f"可选语言：中文、英文、日文、中英混合、日英混合、多语种混合\n"
         f"(记得加上命令头，可用命令头: {nonebot.get_driver().config.command_start})"
     )
+
+
+# ── agent 侧接线：概率语音回复 + speak 工具 ──────────────────────
+# 全部挂 nonebot-plugin-agent（capability 注册中心 + outbound 回复变换器），
+# startup 晚于全部插件 import，不依赖加载顺序；agent 不在时只剩 tts 指令。
+PLUGIN_ID = "nonebot-plugin-gpt-sovits"
+
+driver = get_driver()
+
+VOICE_SCHEMA = {
+    "voice_probability": {"description": "模型回复转语音的概率（0~1）", "type": "float", "default": 0.12, "hint": "0.12 ≈ 八条里一条"},
+    "voice_cooldown": {"description": "同会话两次语音的最小间隔（秒）", "type": "int", "default": 240},
+    "voice_max_chars": {"description": "超过此字数不转语音", "type": "int", "default": 50},
+}
+
+
+def register_agent_hooks(cap_module, outbound_module) -> None:
+    """独立成函数可测（同 weather 插件姿势）。本部署只有 OneBot V11，段类型直接引。"""
+    from nonebot.adapters.onebot.v11 import MessageSegment
+    outbound_module.register_reply_transformer(voice.maybe_voice)
+
+    @cap_module.register(
+        PLUGIN_ID,
+        "把一段文字用西西的声音念成语音发进对话。用户说「念出来/发语音/说出来」时用；"
+        "别对长文（>60字）和列表用，也别连着调用——偶尔说一句才有味道",
+        name="speak_text",
+        config_schema=VOICE_SCHEMA,
+        parameters={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "要念的文字（口语化，≤60字）"},
+            },
+            "required": ["text"],
+        },
+    )
+    async def speak_text(bot, event, text: str = "") -> str:
+        cfg = load_config()
+        text = _REPEAT_RUN.sub(r"\1\1\1", text.strip())
+        if not text:
+            return "（没给要念的文字）"
+        ref = voice.pick_ref(cfg)
+        if ref is None:
+            return "（语音服务没配好，先不念了）"
+        wav = await tts_client.synthesize(cfg, text[:120], *ref)
+        if wav is None:
+            return "（语音服务现在不在线，打字说吧）"
+        seg = MessageSegment.record(wav)
+        state = await outbound_module.attach_or_send(bot, event, seg)
+        return "已把这段话发成了语音" if state != "skipped" else "（这里发不了语音）"
+
+    cap_module.register_prompt(
+        PLUGIN_ID,
+        "语音说话纪律",
+        "speak_text 是你的嗓子：想用声音表达、或被要求念出来时调用，一段 ≤60 字。"
+        "平时打字就好——语音是偶尔的惊喜，不是常态。",
+    )
+
+
+@driver.on_startup
+async def _register_agent_hooks() -> None:
+    plug = nonebot.get_plugin("nonebot-plugin-agent")
+    if plug is None:
+        logger.warning("[gpt_sovits] 未找到 nonebot-plugin-agent，语音回复/工具不注册（tts 指令仍可用）")
+        return
+    register_agent_hooks(plug.module.capability, plug.module.outbound)
+    logger.info("[gpt_sovits] 概率语音回复 + speak_text 工具已挂进 agent")

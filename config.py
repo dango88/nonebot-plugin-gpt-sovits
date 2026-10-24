@@ -31,6 +31,8 @@ GPT_SOVITS_TOML = Path.cwd() / "config" / "gpt_sovits.toml"
 
 _API_KEYS = {"base_url", "api_v2", "command", "convert_to_silk"}
 
+_VOICE_KEYS = {"enabled", "probability", "cooldown", "max_chars", "min_chars", "groups"}
+
 # api_v2 透传推理参数的合法键（generate_v2 只转发这些；写错键在这里当场报错更有用）
 _ARG_KEYS = {
     "aux_ref_audio_paths", "top_k", "top_p", "temperature", "text_split_method",
@@ -39,7 +41,7 @@ _ARG_KEYS = {
     "repetition_penalty",
 }
 
-_KNOWN_SECTIONS = {"api", "args", "emotions"}
+_KNOWN_SECTIONS = {"api", "args", "emotions", "voice"}
 
 
 class _ApiSection(TypedDict, total=False):
@@ -59,6 +61,14 @@ class Config(BaseModel):
 
     # ── 情绪 ──────────────────────────────────────────
     emotions: list[Emotion] = Field(default_factory=list)
+
+    # ── 语音回复（概率把模型回复转成语音） ─────────────
+    voice_enabled: bool = True          # 总开关；关掉只保留 tts 指令和 speak 工具
+    voice_probability: float = 0.12     # 每条模型回复第一条气泡转语音的概率
+    voice_cooldown: int = 240           # 同会话两次语音回复的最小间隔（秒）
+    voice_max_chars: int = 50           # 超过字数不转（长文合成慢，读起来也累）
+    voice_min_chars: int = 4            # 太短不转（「嗯」这种文字更自然）
+    voice_groups: list[str] = Field(default_factory=list)  # 会话白名单（group_123/private_45），空=全部
 
 
 def _expect(section: dict[str, object], key: str, where: str, typ: type[str] | type[bool]) -> object:
@@ -130,6 +140,25 @@ def _parse_emotions(rows: object, path: Path) -> list[Emotion]:
     return emotions
 
 
+def _parse_voice(table: object, path: Path) -> dict[str, object]:
+    if not isinstance(table, dict):
+        raise ValueError(f"{path}: [voice] 必须是表")
+    bad = set(table) - _VOICE_KEYS
+    if bad:
+        raise ValueError(f"{path}: [voice] 含未知键 {sorted(bad)}，合法键 {_VOICE_KEYS}")
+    out: dict[str, object] = {}
+    for key, typ in (("enabled", bool), ("probability", float), ("cooldown", int),
+                     ("max_chars", int), ("min_chars", int)):
+        if key in table:
+            out[f"voice_{key}"] = typ(table[key])
+    if "groups" in table:
+        rows = table["groups"]
+        if not isinstance(rows, list) or not all(isinstance(g, str) for g in rows):
+            raise ValueError(f"{path}: [voice] groups 必须是字符串数组（group_123 形态）")
+        out["voice_groups"] = rows
+    return out
+
+
 def _read_toml(path: Path) -> Config:
     """读 TOML 装平成 Config。未知键、放错分节当场报错——
     静默回落默认值会掩盖拼写错误。"""
@@ -140,7 +169,8 @@ def _read_toml(path: Path) -> Config:
     args = _parse_args(doc["args"], path) if "args" in doc else {}
     emotions = _parse_emotions(doc["emotions"], path) if "emotions" in doc else []
     api = _parse_api(doc["api"], path) if "api" in doc else {}
-    return Config(**api, args=args, emotions=emotions)
+    voice = _parse_voice(doc["voice"], path) if "voice" in doc else {}
+    return Config(**api, **voice, args=args, emotions=emotions)
 
 
 _TOML_HEADER = """# GPT-SoVITS 语音合成（nonebot-plugin-gpt-sovits）配置
