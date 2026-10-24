@@ -73,7 +73,7 @@ tts = on_alconna(
                     completion=lambda: "请输入要转换的语言，可选语言：中文、英文、日文、中英混合、日英混合、多语种混合"
                 ),
             ],
-            default="auto",
+            default="zh",
             help_text="可选语言：中文、英文、日文、中英混合、日英混合、多语种混合",
         ),
     ),
@@ -100,7 +100,8 @@ async def handle_tts(arp: Arparma):
     e_args: dict = arp.options["e"].args if "e" in arp.options else {}
     emotion_index: str = str(e_args["emotion"]) if "emotion" in e_args else "0"
     l_args: dict = arp.options["l"].args if "l" in arp.options else {}
-    text_language: str = str(l_args["language"]) if "language" in l_args else "auto"
+    # 默认 zh（中英混合）：auto 的语言检测会误判古风句为日语（出日音）且切坏分词（漏字）
+    text_language: str = str(l_args["language"]) if "language" in l_args else "zh"
 
     cfg = load_config()
     if not cfg.emotions:
