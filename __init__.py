@@ -1,4 +1,6 @@
 import random
+import re
+
 import nonebot
 from nonebot.log import logger
 from nonebot import require, on_command
@@ -85,10 +87,15 @@ help_matcher = on_command(
     "gptsovits帮助", priority=10, block=True, aliases={"gsv帮助", "gsvhelp"}
 )
 
+_REPEAT_RUN = re.compile(r"(.)\1{3,}")
+
 
 @tts.handle()
 async def handle_tts(arp: Arparma):
     text: str = arp.main_args["text"]
+    # 同一个字连打 4 次以上压到 3 次：t2s 训练集里没有长重复串，「啦啦啦啦…」会
+    # 糊成杂音或整串被吞（实测 3 连字以内稳定），压完发音干净也不丢语气
+    text = _REPEAT_RUN.sub(r"\1\1\1", text)
     # 新版 alconna 的 Option default 不落进 Arparma（缺省时 args 为空表），显式判空取默认
     e_args: dict = arp.options["e"].args if "e" in arp.options else {}
     emotion_index: str = str(e_args["emotion"]) if "emotion" in e_args else "0"
